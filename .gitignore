@@ -1,0 +1,10 @@
+generated/
+docker_volumes/
+traffic/
+__pycache__/
+*.pyc
+*.pem
+*.pcap
+.DS_Store
+docker-compose.yml
+Dockerfile.vulnbox
