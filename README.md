@@ -82,6 +82,7 @@ ez-ad-env/
 ```
 
 ## ForcAD API
+<img width="1007" height="460" alt="image" src="https://github.com/user-attachments/assets/931b04a9-e7ce-4960-8825-c4a0fbcacb08" />
 
 ### Scoreboard
 
@@ -142,3 +143,6 @@ sudo wg-quick up /path/to/team-X.conf
 # Then SSH into your vulnbox
 ssh -i team-X root@10.80.{team}.2
 ```
+
+
+<img width="520" height="515" alt="image" src="https://github.com/user-attachments/assets/d304cd21-3634-4826-9db7-bacb9c23d4de" />
