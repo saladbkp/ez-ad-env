@@ -141,22 +141,12 @@ def generate_vulnbox_compose(num_teams, ssh_keys):
             "container_name": svc_name,
             "restart": "unless-stopped",
             "hostname": f"team-{team}",
-            "volumes": [f"team-{team}-data:/data", f"team-{team}-secrets:/app/secrets"],
+            "privileged": True,
+            "volumes": [f"team-{team}-docker:/var/lib/docker"],
             "networks": {NETWORK_NAME: {"ipv4_address": ip}},
         }
 
-        # CalcPwn (pwn, port 8081) shares network namespace
-        calc_name = f"calcpwn-team-{team}"
-        services[calc_name] = {
-            "build": "./services/calcpwn",
-            "container_name": calc_name,
-            "restart": "unless-stopped",
-            "network_mode": f"service:{svc_name}",
-            "volumes": [f"team-{team}-secrets:/app/secrets"],
-        }
-
-        volumes[f"team-{team}-data"] = None
-        volumes[f"team-{team}-secrets"] = None
+        volumes[f"team-{team}-docker"] = None
 
     # Tcpdump on team-a for Tulip
     if num_teams > 0:
@@ -212,20 +202,22 @@ def generate_vulnbox_compose(num_teams, ssh_keys):
 
 
 def generate_vulnbox_dockerfile(ssh_keys):
-    """Create a Dockerfile that runs notekeeper + sshd."""
-    print("\n🐳 Generating Dockerfile.vulnbox...")
+    """Create a Dockerfile for DinD vulnbox: sshd + Docker daemon + challenge source."""
+    print("\n🐳 Generating Dockerfile.vulnbox (Docker-in-Docker)...")
     dockerfile = textwrap.dedent("""\
-        FROM python:3.11-slim
+        FROM docker:27-dind
 
-        # Install SSH server
-        RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && \\
-            rm -rf /var/lib/apt/lists/* && \\
-            mkdir -p /run/sshd
+        # Install SSH server, bash, python3, compose plugin
+        RUN apk update && apk upgrade --no-cache && \\
+            apk add --no-cache openssh-server-common openssh-server openssh-keygen \\
+                bash python3 docker-cli-compose curl && \\
+            ssh-keygen -A && mkdir -p /run/sshd
 
         # SSH config: key-only auth
         RUN sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && \\
             sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && \\
-            sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+            sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \\
+            echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
 
         # Add team SSH public key
         ARG SSH_PUB_KEY=""
@@ -233,17 +225,60 @@ def generate_vulnbox_dockerfile(ssh_keys):
             echo "${SSH_PUB_KEY}" > /root/.ssh/authorized_keys && \\
             chmod 600 /root/.ssh/authorized_keys
 
-        # Install notekeeper
-        WORKDIR /app
-        COPY services/notekeeper/requirements.txt /app/requirements.txt
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY services/notekeeper/app.py /app/app.py
-        RUN mkdir -p /data
+        # Setup challenge directories
+        RUN mkdir -p /root/notekeeper /root/calcpwn
 
-        EXPOSE 22 8080
+        # Notekeeper challenge (web, port 8080)
+        COPY services/notekeeper/app.py /root/notekeeper/app.py
+        COPY services/notekeeper/requirements.txt /root/notekeeper/requirements.txt
+        COPY services/notekeeper/Dockerfile /root/notekeeper/Dockerfile
 
-        # Start both sshd and gunicorn
-        CMD /usr/sbin/sshd && gunicorn -b 0.0.0.0:8080 -w 2 --timeout 30 app:app
+        # Calcpwn challenge (pwn, port 8081)
+        COPY services/calcpwn/app.py /root/calcpwn/app.py
+        COPY services/calcpwn/requirements.txt /root/calcpwn/requirements.txt
+        COPY services/calcpwn/Dockerfile /root/calcpwn/Dockerfile
+
+        # docker-compose.yml for notekeeper
+        RUN printf 'services:\\n\\
+          notekeeper:\\n\\
+            build: .\\n\\
+            restart: unless-stopped\\n\\
+            ports:\\n\\
+              - "8080:8080"\\n\\
+            volumes:\\n\\
+              - ./data:/data\\n' > /root/notekeeper/docker-compose.yml
+
+        # docker-compose.yml for calcpwn
+        RUN printf 'services:\\n\\
+          calcpwn:\\n\\
+            build: .\\n\\
+            restart: unless-stopped\\n\\
+            ports:\\n\\
+              - "8081:8081"\\n\\
+            volumes:\\n\\
+              - ./data:/data\\n' > /root/calcpwn/docker-compose.yml
+
+        # Startup helper: wait for dockerd, build challenges, start sshd
+        RUN printf '#!/bin/sh\\n\\
+        # Wait for Docker daemon\\n\\
+        while ! docker info >/dev/null 2>&1; do sleep 1; done\\n\\
+        \\n\\
+        # Build and start challenges\\n\\
+        cd /root/notekeeper && docker compose up -d --build 2>&1\\n\\
+        cd /root/calcpwn && docker compose up -d --build 2>&1\\n\\
+        \\n\\
+        # Start sshd\\n\\
+        /usr/sbin/sshd -D\\n' > /setup.sh && chmod +x /setup.sh
+
+        # Wrapper entrypoint: launch setup in background, then exec dind entrypoint
+        RUN printf '#!/bin/sh\\n\\
+        /setup.sh &\\n\\
+        exec dockerd-entrypoint.sh "$@"\\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+        EXPOSE 22 8080 8081
+
+        ENTRYPOINT ["/entrypoint.sh"]
+        CMD ["dockerd"]
     """)
     path = os.path.join(SCRIPT_DIR, "Dockerfile.vulnbox")
     with open(path, "w") as f:
@@ -604,6 +639,11 @@ def main():
     print("\n🧹 Cleaning up previous game...")
     run(f"cd {SCRIPT_DIR} && docker compose down -v --remove-orphans 2>/dev/null", check=False)
     run(f"cd {FORCAD_DIR} && docker compose down -v --remove-orphans 2>/dev/null", check=False)
+    # Remove any stale containers by name (from other compose projects)
+    for i in range(num_teams):
+        t = chr(ord('a') + i) if i < 26 else f"t{i}"
+        run(f"docker rm -f vuln-team-{t} calcpwn-team-{t} tcpdump-team-{t} 2>/dev/null", check=False)
+    run("docker rm -f wg-vpn 2>/dev/null", check=False)
 
     ensure_dirs()
 
