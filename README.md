@@ -20,6 +20,13 @@ python3 generate_game.py 3 200 60
 
 # Tear down everything
 python3 generate_game.py --destroy
+
+ # reset game（remain SSH key、VPN、vulnbox）
+ python3 generate_game.py --reset 3 200 60
+ 
+ # only reset default para
+ python3 generate_game.py --reset
+
 ```
 
 ## What It Does
