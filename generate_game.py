@@ -590,6 +590,67 @@ def detect_host_ip():
         return "localhost"
 
 
+def reset_game(num_teams, total_ticks, tick_seconds):
+    """Reset game: restart ForcAD with fresh scores/ticks, keep vulnboxes/keys/VPN intact."""
+    print("=" * 60)
+    print(f"🔄 Resetting game: {total_ticks} rounds × {tick_seconds}s")
+    print("   Keeping: SSH keys, WireGuard VPN, vulnboxes")
+    print("=" * 60)
+
+    try:
+        import yaml
+    except ImportError:
+        run("pip3 install pyyaml", check=True)
+        import yaml
+
+    # Step 1: Stop ForcAD only
+    print("\n🛑 Stopping ForcAD...")
+    run(f"cd {FORCAD_DIR} && docker compose down -v --remove-orphans 2>/dev/null", check=False)
+
+    # Step 2: Regenerate ForcAD config with new start_time
+    start_time = generate_forcad_config(num_teams, total_ticks, tick_seconds)
+
+    # Step 3: Clear old DB data for fresh init
+    start_forcad()
+
+    # Step 4: Wait for ForcAD to initialize and get tokens
+    print("\n⏳ Waiting for ForcAD to initialize...")
+    tokens = {}
+    for _ in range(30):
+        time.sleep(2)
+        tokens = get_team_tokens()
+        if len(tokens) >= num_teams:
+            break
+
+    # Step 5: Rebuild challenge containers inside vulnboxes (reset data)
+    print("\n🔄 Resetting challenge data inside vulnboxes...")
+    for i in range(num_teams):
+        team = chr(ord('a') + i) if i < 26 else f"t{i}"
+        svc = f"vuln-team-{team}"
+        run(f"docker exec {svc} sh -c 'cd /root/notekeeper && docker compose down -v && docker compose up -d' 2>/dev/null", check=False)
+        run(f"docker exec {svc} sh -c 'cd /root/calcpwn && docker compose down -v && docker compose up -d' 2>/dev/null", check=False)
+        print(f"  ✅ {svc} challenges reset")
+
+    # Print summary
+    host_ip = detect_host_ip()
+    print("\n" + "=" * 60)
+    print("✅ Game reset complete!")
+    print("=" * 60)
+    print(f"📊 Scoreboard:    http://{host_ip}:8080")
+    print(f"⏱️  Game starts:   {start_time.strftime('%H:%M:%S')}")
+    print(f"📏 Rounds:        {total_ticks} × {tick_seconds}s = {total_ticks * tick_seconds // 60}min")
+    print()
+    print(f"{'Team':<10} {'IP':<16} {'Token':<20}")
+    print("-" * 50)
+    for i in range(num_teams):
+        team = chr(ord('A') + i) if i < 26 else f"T{i}"
+        name = f"Team-{team}"
+        ip = f"10.80.{i}.2"
+        token = tokens.get(name, {}).get("token", "???")
+        print(f"{name:<10} {ip:<16} {token:<20}")
+    print("\n⚠️  Note: Team tokens changed! Update your exploit scripts.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="🏁 A/D CTF Game Generator",
@@ -598,6 +659,8 @@ def main():
             Examples:
               python3 generate_game.py 3              # 3 teams, 200 rounds, 60s each
               python3 generate_game.py 5 100 30       # 5 teams, 100 rounds, 30s ticks
+              python3 generate_game.py --reset         # Reset game (new ticks, keep infra)
+              python3 generate_game.py --reset 3 100 30  # Reset with new tick config
               python3 generate_game.py --destroy       # Tear down everything
         """),
     )
@@ -605,11 +668,16 @@ def main():
     parser.add_argument("ticks", nargs="?", type=int, default=200, help="Total ticks/rounds (default: 200)")
     parser.add_argument("tick_seconds", nargs="?", type=int, default=60, help="Seconds per tick (default: 60)")
     parser.add_argument("--destroy", action="store_true", help="Tear down the entire game environment")
+    parser.add_argument("--reset", action="store_true", help="Reset game only (new ticks/scores, keep keys/VPN/vulnboxes)")
     parser.add_argument("--host-ip", default=None, help="Host IP for VPN endpoint (auto-detected)")
     args = parser.parse_args()
 
     if args.destroy:
         destroy()
+        return
+
+    if args.reset:
+        reset_game(args.num_teams, args.ticks, args.tick_seconds)
         return
 
     num_teams = args.num_teams
