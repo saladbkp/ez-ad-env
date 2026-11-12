@@ -22,6 +22,11 @@ docker compose version
 # Clone ForcAD next to this repo
 git clone https://github.com/pomo-mondreganto/ForcAD.git ../ForcAD
 
+# need for the requirement
+cd ~/ForcAD
+nano cli/requirements.txt 换成 pydantic>=2.13
+pip3 install -r cli/requirements.txt --break-system-packages
+
 # Generate a game: 3 teams, 200 rounds, 60 seconds per round
 python3 generate_game.py 3 200 60
 
