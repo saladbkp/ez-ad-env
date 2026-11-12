@@ -12,6 +12,13 @@ One-command Attack/Defense CTF environment using [ForcAD](https://github.com/pom
 ## Quick Start
 
 ```bash
+# pre start must do !!!!
+sudo apt-get update
+sudo apt-get install -y docker-compose-plugin || sudo apt-get install -y docker-compose-v2
+docker compose version
+
+# git clone this repo ... then 
+
 # Clone ForcAD next to this repo
 git clone https://github.com/pomo-mondreganto/ForcAD.git ../ForcAD
 
