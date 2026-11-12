@@ -51,8 +51,12 @@ python3 generate_game.py --destroy
 6. **Outputs credentials** — team tokens, SSH keys, VPN configs, saved to `generated/game_info.json`
 
 ## Architecture
+<img width="603" height="326" alt="image" src="https://github.com/user-attachments/assets/84e37902-e25b-43e6-b6fc-03542d23a902" />
 
 ```
+careful endpoint of wireguard in conf not always be 10.xxxxx, if in public ip just put public ip
+
+
 Player → WireGuard VPN → 10.80.0.0/16 game network
                             ├── SSH → own vulnbox (10.80.{team}.2)
                             ├── Attack → other vulnboxes :8080 :8081
